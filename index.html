@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PN结二极管仿真</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}body{background:#f1f3f5;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:12px;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#212529;user-select:none}
+        .main{width:100%;max-width:1200px;background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,0.08);border:1px solid #dee2e6;overflow:hidden}
+        .header{padding:14px 24px;border-bottom:1px solid #dee2e6;display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f8f9fa}
+        .header h1{font-size:1.3rem;font-weight:700;background:linear-gradient(135deg,#1e3a8a,#3b82f6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+        .badge{font-size:.7rem;padding:5px 12px;border-radius:20px;background:#e9ecef;border:1px solid #dee2e6;color:#6c757d}
+        .controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;padding:12px 20px;border-bottom:1px solid #dee2e6;background:#f8f9fa}
+        .ctrl{display:flex;flex-direction:column;gap:4px}.ctrl label{font-size:.7rem;font-weight:600;color:#6c757d}
+        select,input[type=range]{background:#fff;border:1px solid #dee2e6;border-radius:7px;padding:7px 10px;font-size:.85rem;outline:none;color:#212529;cursor:pointer;font-family:inherit}
+        select:hover,select:focus{border-color:#3b82f6}
+        input[type=range]{appearance:none;-webkit-appearance:none;height:6px;background:#ced4da;margin:4px 0;padding:0}
+        input[type=range]::-webkit-slider-thumb{appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:2px solid #3b82f6;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+        .range-labels{display:flex;justify-content:space-between;font-size:.65rem;color:#6c757d}
+        .btn-row{display:flex;gap:6px}.btn{padding:7px 14px;border-radius:7px;border:1px solid #dee2e6;background:#fff;cursor:pointer;font-size:.78rem;font-weight:600;transition:all .18s;font-family:inherit}.btn:hover{background:#e9ecef}.btn.active{background:#3b82f6;color:#fff;border-color:#3b82f6}
+        .row{display:flex;gap:10px;padding:10px 14px;flex-wrap:wrap;justify-content:center}
+        .canvas-wrap{position:relative;background:#fff;border-radius:12px;border:1px solid #dee2e6;overflow:hidden;flex:1 1 580px;min-width:400px;max-width:750px;min-height:500px;box-shadow:0 2px 8px rgba(0,0,0,0.02)}
+        .canvas-wrap.iv{flex:0 0 340px;min-width:280px;max-width:380px;min-height:500px}
+        .canvas-label{position:absolute;top:10px;left:14px;font-size:.75rem;font-weight:600;color:#6c757d;background:rgba(255,255,255,0.9);padding:4px 10px;border-radius:6px;border:1px solid #dee2e6;z-index:5}
+        canvas{display:block;width:100%;height:100%}
+        @media(max-width:900px){.row{flex-direction:column}.canvas-wrap,.canvas-wrap.iv{flex:1 1 auto;min-width:auto;max-width:none;height:400px}}
+    </style>
+</head>
+<body>
+<div class="main">
+    <div class="header"><h1>🔬 PN 结二极管仿真</h1><span class="badge">能带 · 耗尽层 · I–V · 载流子</span></div>
+    <div class="controls" id="controls"></div>
+    <div class="row">
+        <div class="canvas-wrap"><div class="canvas-label">能带图 & 载流子动画</div><canvas id="bandCvs"></canvas></div>
+        <div class="canvas-wrap iv"><div class="canvas-label">I–V 特性曲线</div><canvas id="ivCvs"></canvas></div>
+    </div>
+</div>
+<script>
+(function(){
+const q=1.602176634e-19, k_eV=8.617333262e-5, eps0=8.854187817e-14;
+const mats={Si:{E0:1.12,ni300:1.5e10,eps:11.7,mun:1350,mup:480,tn:1e-6,tp:1e-6},Ge:{E0:0.67,ni300:2.4e13,eps:16,mun:3900,mup:1900,tn:1e-6,tp:1e-6},GaAs:{E0:1.42,ni300:1.8e6,eps:12.9,mun:8000,mup:400,tn:1e-8,tp:1e-8}};
+let mat='Si', T=300, Na=1e16, Nd=1e16, Vapp=0, spd=1, parts=[], MAXP=80;
+
+const bandCvs=document.getElementById('bandCvs'), bandCtx=bandCvs.getContext('2d');
+const ivCvs=document.getElementById('ivCvs'), ivCtx=ivCvs.getContext('2d');
+
+function Eg(T){ const m=mats[mat]; const a=mat=='Si'?4.73e-4:(mat=='Ge'?4.77e-4:5.4e-4); const b=mat=='Si'?636:(mat=='Ge'?235:204); return m.E0 - a*T*T/(T+b); }
+function ni(T){ const m=mats[mat]; const E=Eg(T); return m.ni300 * Math.pow(T/300,1.5) * Math.exp(-E/(2*k_eV*T) + m.E0/(2*k_eV*300)); }
+function Vbi(Na,Nd,ni,T){ return ni>0 ? k_eV*T * Math.log(Na*Nd/(ni*ni)) : 0; }
+function depl(Na,Nd,Vbi,Vapp,epsr){
+    const eps=epsr*eps0, Veff=Math.max(Vbi-Vapp,0.001);
+    const W=Math.sqrt(2*eps/q * (1/Na+1/Nd) * Veff)*1e4;
+    return {W, xn:W*Na/(Na+Nd), xp:W*Nd/(Na+Nd)};
+}
+function current(Na,Nd,ni,Vapp,T,m){
+    const Vt=k_eV*T, Dn=m.mun*Vt, Dp=m.mup*Vt;
+    const Ln=Math.sqrt(Dn*m.tn)*1e-4, Lp=Math.sqrt(Dp*m.tp)*1e-4;
+    const Is=q*1e-4*ni*ni*(Dn/(Ln*Na)+Dp/(Lp*Nd));
+    const arg=Math.min(Math.max(Vapp/(1.05*Vt),-80),80);
+    const I=Is*(Math.exp(arg)-1);
+    return {I, disp:I/(1+Math.abs(I)/0.5)};
+}
+function physics(){
+    const m=mats[mat], n=ni(T), vb=Vbi(Na,Nd,n,T), dp=depl(Na,Nd,vb,Vapp,m.eps), iv=current(Na,Nd,n,Vapp,T,m);
+    return {m,n,vb,dp,iv};
+}
+
+function spawn(dt){
+    const ph=physics(), rate=8*(1+Math.log10(1+Math.abs(ph.iv.disp)/Math.max(1e-15,Math.abs(ph.iv.I)))*3)*spd;
+    if(Math.random()<rate*dt && parts.length<MAXP){
+        const e=Math.random()<0.5;
+        parts.push({x:e?0.35+Math.random()*0.25:-0.35-Math.random()*0.25, y:(Math.random()-0.5)*0.25, tx:e?-0.4:0.4, e, life:1, speed:0.08+Math.random()*0.18, size:4.5+Math.random()*4});
+    }
+    for(let i=parts.length-1;i>=0;i--){
+        const p=parts[i], dx=p.tx-p.x, mv=p.speed*spd*(0.6+0.4*Math.abs(Vapp)/2);
+        p.x+=Math.sign(dx)*Math.min(Math.abs(dx),mv*dt*10);
+        p.y+=(Math.random()-0.5)*0.015*spd;
+        p.y=Math.max(-0.38,Math.min(0.38,p.y));
+        p.life-=dt*0.25*spd;
+        if(Math.abs(p.x-p.tx)<0.03||p.life<=0) parts.splice(i,1);
+    }
+    while(parts.length>MAXP) parts.shift();
+}
+
+function drawBand(ph){
+    const c=bandCvs, ctx=bandCtx, dpr=Math.min(devicePixelRatio||1,2);
+    const rect=c.parentElement.getBoundingClientRect();
+    const w=rect.width-2, h=Math.max(500,rect.height-2);
+    c.width=w*dpr; c.height=h*dpr; c.style.width=w+'px'; c.style.height=h+'px';
+    ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr,dpr);
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+    const {dp}=ph, Wdep=Math.max(dp.W,0.015), xAxisRange=Math.max(Wdep*5,1.5), xMin=-xAxisRange/2, xMax=xAxisRange/2;
+    const pL=60,pR=50,pT=50,pB=100, pW=w-pL-pR, pH=h-pT-pB;
+    const toX=x=>pL+(x-xMin)/(xMax-xMin)*pW;
+    const E=Eg(T);
+    const Ec_P=0.35, Ev_P=Ec_P-E;
+    const Ef_P=Ec_P-0.5*E - k_eV*T*Math.log(Na/ph.n);
+    const Ec_N=Ec_P - ph.vb + Vapp, Ev_N=Ec_N-E;
+    const Ef_N=Ec_N-0.5*E + k_eV*T*Math.log(Nd/ph.n);
+    const curve=x=>{ let t=(x+Wdep/2)/Math.max(Wdep,0.001); return 1/(1+Math.exp(-(Math.max(0,Math.min(1,t))-0.5)*12)); };
+    const EcAt=x=>Ec_P+(Ec_N-Ec_P)*curve(x);
+    const EvAt=x=>Ev_P+(Ev_N-Ev_P)*curve(x);
+    const EfAt=x=>Ef_P+(Ef_N-Ef_P)*curve(x);
+    const eMin=Math.min(Ev_P,Ev_N)-0.2, eMax=Math.max(Ec_P,Ec_N)+0.2;
+    const toY=e=>pT+(eMax-e)/(eMax-eMin)*pH;
+
+    ctx.strokeStyle='rgba(0,0,0,0.05)'; ctx.lineWidth=0.5;
+    for(let i=0;i<=8;i++){ const y=pT+i*pH/8; ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(w-pR,y); ctx.stroke(); }
+    for(let i=0;i<=6;i++){ const x=pL+i*pW/6; ctx.beginPath(); ctx.moveTo(x,pT); ctx.lineTo(x,h-pB); ctx.stroke(); }
+
+    const xLeft=toX(-dp.xp), xRight=toX(dp.xn);
+    ctx.fillStyle='rgba(255,180,100,0.15)'; ctx.fillRect(xLeft,pT,xRight-xLeft,pH);
+    ctx.strokeStyle='rgba(255,140,60,0.5)'; ctx.setLineDash([6,4]);
+    ctx.beginPath(); ctx.moveTo(xLeft,pT); ctx.lineTo(xLeft,h-pB); ctx.moveTo(xRight,pT); ctx.lineTo(xRight,h-pB); ctx.stroke();
+    ctx.setLineDash([]);
+    const drawLine=(fn,color,w,d=[])=>{ ctx.strokeStyle=color; ctx.lineWidth=w; ctx.setLineDash(d); ctx.beginPath();
+        for(let i=0;i<=300;i++){ const x=xMin+(xMax-xMin)*i/300; const sx=toX(x), sy=toY(fn(x)); i===0?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy); } ctx.stroke(); ctx.setLineDash([]); };
+    drawLine(EcAt,'#3b82f6',2.8); drawLine(EvAt,'#ef4444',2.8); drawLine(EfAt,'#10b981',2,[8,4]);
+
+    const barrier=Math.abs(EcAt(-dp.xp)-EcAt(dp.xn));
+    ctx.fillStyle='#d97706'; ctx.font='bold 13px "Segoe UI","PingFang SC",sans-serif'; ctx.textAlign='center';
+    ctx.fillText(`势垒 ${barrier.toFixed(3)} eV`, (xLeft+xRight)/2, toY((EcAt(-dp.xp)+EcAt(dp.xn))/2)-10);
+
+    for(const p of parts){
+        const px=toX(p.x*xAxisRange), py=toY(p.e?EcAt(p.x*xAxisRange):EvAt(p.x*xAxisRange)) + p.y*pH*0.15;
+        const grad=ctx.createRadialGradient(px,py,p.size*0.2,px,py,p.size);
+        if(p.e){ grad.addColorStop(0,'rgba(59,130,246,0.95)'); grad.addColorStop(0.4,'rgba(37,99,235,0.8)'); grad.addColorStop(1,'rgba(29,78,216,0)'); }
+        else { grad.addColorStop(0,'rgba(239,68,68,0.95)'); grad.addColorStop(0.4,'rgba(220,38,38,0.8)'); grad.addColorStop(1,'rgba(185,28,28,0)'); }
+        ctx.globalAlpha=p.life; ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,p.size,0,2*Math.PI); ctx.fill(); ctx.globalAlpha=1;
+    }
+    ctx.fillStyle='#4b5563'; ctx.font='bold 13px "Segoe UI","PingFang SC",sans-serif'; ctx.textAlign='center';
+    const lY=h-30; ctx.fillText('位置 [μm]', w/2, lY);
+    ctx.font='12px "Segoe UI","PingFang SC",sans-serif'; ctx.fillText('P 区', pL+pW*0.15, lY+18); ctx.fillText('N 区', pL+pW*0.85, lY+18);
+    ctx.fillText('耗尽层', (xLeft+xRight)/2, pT+pH-6); ctx.fillText(`W=${Wdep.toFixed(3)}μm`, (xLeft+xRight)/2, pT+pH+14);
+    ctx.save(); ctx.translate(14, pT+pH/2); ctx.rotate(-Math.PI/2); ctx.fillText('电子能量 [eV]', 0, 0); ctx.restore();
+}
+
+function drawIV(ph){
+    const c=ivCvs, ctx=ivCtx, dpr=Math.min(devicePixelRatio||1,2);
+    const rect=c.parentElement.getBoundingClientRect();
+    const w=rect.width-2, h=Math.max(500,rect.height-2);
+    c.width=w*dpr; c.height=h*dpr; c.style.width=w+'px'; c.style.height=h+'px';
+    ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr,dpr);
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+    const pL=70,pR=35,pT=40,pB=100, pW=w-pL-pR, pH=h-pT-pB;
+    const pts=[]; for(let i=0;i<=400;i++){ const V=-2+(4*i/400); const iv=current(Na,Nd,ph.n,V,T,ph.m); pts.push({V, I:iv.disp}); }
+    let Imax=0; pts.forEach(p=>Imax=Math.max(Imax,Math.abs(p.I))); Imax=Math.max(Imax,1e-9)*1.3;
+    const toX=v=>pL+(v+2)/4*pW, toY=i=>pT+pH/2 - (i/Imax)*(pH/2);
+    ctx.strokeStyle='rgba(0,0,0,0.05)';
+    for(let i=0;i<=6;i++){ const y=pT+i*pH/6; ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(w-pR,y); ctx.stroke(); }
+    for(let i=0;i<=5;i++){ const x=pL+i*pW/5; ctx.beginPath(); ctx.moveTo(x,pT); ctx.lineTo(x,h-pB); ctx.stroke(); }
+    ctx.strokeStyle='rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.moveTo(pL,toY(0)); ctx.lineTo(w-pR,toY(0)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(toX(0),pT); ctx.lineTo(toX(0),h-pB); ctx.stroke();
+    ctx.strokeStyle='#3b82f6'; ctx.lineWidth=2.5; ctx.beginPath();
+    pts.forEach((p,i)=>{ const sx=toX(p.V), sy=toY(p.I); i===0?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy); }); ctx.stroke();
+    const wpi=current(Na,Nd,ph.n,Vapp,T,ph.m), wpx=toX(Vapp), wpy=toY(wpi.disp);
+    const glow=ctx.createRadialGradient(wpx,wpy,0,wpx,wpy,18);
+    glow.addColorStop(0,'rgba(245,158,11,0.9)'); glow.addColorStop(0.4,'rgba(217,119,6,0.5)'); glow.addColorStop(1,'rgba(180,83,9,0)');
+    ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(wpx,wpy,18,0,2*Math.PI); ctx.fill();
+    ctx.fillStyle='#d97706'; ctx.beginPath(); ctx.arc(wpx,wpy,7,0,2*Math.PI); ctx.fill();
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle='#4b5563'; ctx.font='bold 13px "Segoe UI","PingFang SC",sans-serif'; ctx.textAlign='center';
+    ctx.fillText('电压 V [V]', w/2, h-30);
+    ctx.save(); ctx.translate(14, pT+pH/2); ctx.rotate(-Math.PI/2); ctx.fillText('电流 I [A]', 0, 0); ctx.restore();
+}
+
+function updateUI(){
+    document.getElementById('tempDisp').textContent=T+' K';
+    document.getElementById('naDisp').textContent=(Na>=1e18?(Na/1e18).toFixed(2)+'×10¹⁸':Na>=1e17?(Na/1e17).toFixed(2)+'×10¹⁷':Na>=1e16?(Na/1e16).toFixed(2)+'×10¹⁶':Na>=1e15?(Na/1e15).toFixed(2)+'×10¹⁵':(Na/1e14).toFixed(2)+'×10¹⁴')+' cm⁻³';
+    document.getElementById('ndDisp').textContent=(Nd>=1e18?(Nd/1e18).toFixed(2)+'×10¹⁸':Nd>=1e17?(Nd/1e17).toFixed(2)+'×10¹⁷':Nd>=1e16?(Nd/1e16).toFixed(2)+'×10¹⁶':Nd>=1e15?(Nd/1e15).toFixed(2)+'×10¹⁵':(Nd/1e14).toFixed(2)+'×10¹⁴')+' cm⁻³';
+    document.getElementById('voltDisp').textContent=Vapp.toFixed(2)+' V';
+    document.getElementById('voltSlider').value=Vapp;
+}
+function setSpeed(s,btn){ spd=s; ['btn05','btn1','btn2'].forEach((id,i)=>{ const el=document.getElementById(id); el.classList.toggle('active', i=== (s===0.5?0: s===1?1:2)); }); }
+// 构建控制面板
+document.getElementById('controls').innerHTML=`
+<div class="ctrl"><label>🧪 材料</label><select id="matSel"><option value="Si">Si (硅) 1.12eV</option><option value="Ge">Ge (锗) 0.67eV</option><option value="GaAs">GaAs 1.42eV</option></select></div>
+<div class="ctrl"><label>🌡️ 温度: <span id="tempDisp">300 K</span></label><input type="range" id="tempSlider" min="250" max="400" value="300" step="1"><div class="range-labels"><span>250K</span><span>300K</span><span>350K</span><span>400K</span></div></div>
+<div class="ctrl"><label>🔴 P区 Na: <span id="naDisp">1×10¹⁶ cm⁻³</span></label><input type="range" id="naSlider" min="14" max="18" value="16" step="0.05"><div class="range-labels"><span>10¹⁴</span><span>10¹⁵</span><span>10¹⁶</span><span>10¹⁷</span><span>10¹⁸</span></div></div>
+<div class="ctrl"><label>🔵 N区 Nd: <span id="ndDisp">1×10¹⁶ cm⁻³</span></label><input type="range" id="ndSlider" min="14" max="18" value="16" step="0.05"><div class="range-labels"><span>10¹⁴</span><span>10¹⁵</span><span>10¹⁶</span><span>10¹⁷</span><span>10¹⁸</span></div></div>
+<div class="ctrl"><label>⚡ 电压: <span id="voltDisp">0.00 V</span></label><input type="range" id="voltSlider" min="-2" max="2" value="0" step="0.005"><div class="range-labels"><span>-2V</span><span>-1V</span><span>0V</span><span>+1V</span><span>+2V</span></div></div>
+<div class="ctrl"><label>⏩ 动画速度</label><div class="btn-row"><button class="btn" id="btn05">0.5×</button><button class="btn active" id="btn1">1×</button><button class="btn" id="btn2">2×</button></div></div>
+`;
+document.getElementById('matSel').onchange=function(){ mat=this.value; parts=[]; };
+document.getElementById('tempSlider').oninput=function(){ T=+this.value; parts=[]; };
+document.getElementById('naSlider').oninput=function(){ Na=Math.pow(10,+this.value); parts=[]; };
+document.getElementById('ndSlider').oninput=function(){ Nd=Math.pow(10,+this.value); parts=[]; };
+document.getElementById('voltSlider').oninput=function(){ Vapp=+this.value; };
+document.getElementById('btn05').onclick=()=>setSpeed(0.5,document.getElementById('btn05'));
+document.getElementById('btn1').onclick=()=>setSpeed(1,document.getElementById('btn1'));
+document.getElementById('btn2').onclick=()=>setSpeed(2,document.getElementById('btn2'));
+
+window.addEventListener('keydown',e=>{
+    if(e.key==='ArrowLeft'){ e.preventDefault(); Vapp=Math.max(-2,Vapp-0.05); document.getElementById('voltSlider').value=Vapp; }
+    else if(e.key==='ArrowRight'){ e.preventDefault(); Vapp=Math.min(2,Vapp+0.05); document.getElementById('voltSlider').value=Vapp; }
+    else if(e.key==='r'||e.key==='R'){ e.preventDefault(); Vapp=0; T=300; Na=1e16; Nd=1e16; mat='Si'; parts=[]; document.getElementById('matSel').value='Si'; document.getElementById('tempSlider').value=300; document.getElementById('naSlider').value=16; document.getElementById('ndSlider').value=16; document.getElementById('voltSlider').value=0; setSpeed(1,document.getElementById('btn1')); }
+});
+let last=performance.now(), phCache;
+function render(now){
+    let dt=(now-last)/1000; if(dt<=0)dt=0.016; if(dt>0.2)dt=0.2; last=now;
+    const ph=physics(); phCache=ph;
+    spawn(dt); drawBand(ph); drawIV(ph); updateUI();
+    requestAnimationFrame(render);
+}
+document.getElementById('matSel').value='Si';
+document.getElementById('tempSlider').value=300;
+document.getElementById('naSlider').value=16;
+document.getElementById('ndSlider').value=16;
+document.getElementById('voltSlider').value=0;
+phCache=physics();
+updateUI();
+requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
